@@ -1,0 +1,312 @@
+-- EXERCITIU 12
+
+-- Cerere 1
+--Afisati numele si prenumele utilizatorilor care au plasat cel puțin 2 comenzi 
+-- și au au numărul de comenzi cu livrările efectuate sau în curs de livrare mai mare decât media numărului de livrări plasate de ceilalti clienți.
+--In plus, afișați totalul plăților, câte carduri sunt inregistrarte sub numele clientului, daca a avut o plata respinsă. 
+--Rezultatele sunt ordonate descrescător in funcție de numărul de livrări.
+
+
+SELECT CONCAT(CONCAT(U.NUME,' '),U.PRENUME) AS NUME,
+       COUNT(DISTINCT C.ID_COMANDA) AS NUMAR_COMENZI,
+       NVL(SUM(C.TOTAL_PLATA),0) AS TOTAL_COMENZI,
+       (CASE  WHEN (SELECT COUNT(P1.ID_PLATA)
+              FROM PLATA P1
+              JOIN COMANDA C1 ON C1.ID_COMANDA = P1.ID_COMANDA
+              WHERE C1.ID_UTILIZATOR = U.ID_UTILIZATOR AND UPPER(P1.STARE) = 'RESPINSA') > 0 
+              THEN 'DA' 
+              ELSE 'NU' END) AS PLATI_RESPINSE,
+              COUNT(CAR.ID_CARD) AS NUMAR_CARDURI
+FROM UTILIZATOR U
+JOIN COMANDA C ON C.ID_UTILIZATOR = U.ID_UTILIZATOR
+JOIN CARD CAR ON CAR.ID_UTILIZATOR = U.ID_UTILIZATOR
+GROUP BY U.ID_UTILIZATOR, U.NUME, U.PRENUME
+HAVING COUNT(DISTINCT C.ID_COMANDA)>=2 and ((
+			SELECT COUNT(C2.ID_COMANDA)
+			FROM COMANDA C2
+			JOIN PLATA P2 ON P2.ID_COMANDA = C2.ID_COMANDA 
+			WHERE (UPPER(P2.STARE) = 'EFECTUATA'  OR UPPER(P2.STARE) = 'IN CURS DE LIVRARE') AND C2.ID_UTILIZATOR = U.ID_UTILIZATOR)>=
+            (SELECT AVG(NUMAR_LIVRARI)
+            FROM (SELECT COUNT(C3.ID_COMANDA) AS NUMAR_LIVRARI
+            FROM UTILIZATOR U3
+            JOIN COMANDA C3 ON U3.ID_UTILIZATOR = C3.ID_UTILIZATOR
+            GROUP BY U3.ID_UTILIZATOR)))
+ORDER BY NUMAR_COMENZI DESC;
+
+
+--subcereri nesincronizate în clauza FROM
+--grupări de date, funcții grup, filtrare la nivel de grupuri cu subcereri nesincronizate
+--(în clauza de HAVING) în care intervin cel puțin 3 tabele (in cadrul aceleiași cereri)
+--ordonări și utilizarea funcțiilor NVL și DECODE (în cadrul aceleiași cereri)
+--concat, upper
+--expresie case 
+
+
+
+-- Cerere 2
+--Pentru toți utilizatorii cu cel puțin un produs in coșul de cumpărături 
+--sa se afișeze cel mai scump produs achiziționat în ultimele 12 luni (numele și prețul), 
+--daca nu au cumpărat nimic se va afișa “fără achizitii” pentru denumirea produsului și 0 la preț.
+
+
+WITH UTILIZATORI_COS AS (
+        SELECT U.ID_UTILIZATOR, U.NUME, U.PRENUME
+        FROM UTILIZATOR U
+        JOIN COS_CUMPARATURI CC ON CC.ID_UTILIZATOR = U.ID_UTILIZATOR
+        JOIN PRODUS_COS PC ON PC.ID_COS = CC.ID_COS
+        GROUP BY U.ID_UTILIZATOR, U.NUME, U.PRENUME
+        HAVING COUNT(PC.ID_PRODUS) > 0),
+PRODUS_MAX AS ( SELECT C1.ID_UTILIZATOR, P1.DENUMIRE_PRODUS, P1.PRET
+                FROM COMANDA C1
+                JOIN PRODUS_COMANDA PC1 ON C1.ID_COMANDA = PC1.ID_COMANDA
+                JOIN PRODUS P1 ON PC1.ID_PRODUS = P1.ID_PRODUS
+                WHERE C1.DATA_COMANDA >= ADD_MONTHS(SYSDATE, -12)
+                    AND P1.PRET IN (SELECT MAX(P2.PRET)
+                                   FROM COMANDA C2
+                                   JOIN PRODUS_COMANDA PC2 ON C2.ID_COMANDA = PC2.ID_COMANDA
+                                   JOIN PRODUS P2 ON PC2.ID_PRODUS = P2.ID_PRODUS
+                                   WHERE C2.DATA_COMANDA >= ADD_MONTHS(SYSDATE, -12)
+                                        AND C2.ID_UTILIZATOR = C1.ID_UTILIZATOR)
+)
+
+SELECT UC.ID_UTILIZATOR,
+        CONCAT(CONCAT(UC.NUME,' '),UC.PRENUME) AS NUME,
+        NVL(PM.DENUMIRE_PRODUS, 'fără achizitii') AS DENUMIRE_PRODUS,
+        NVL(PM.PRET, 0) AS PRET
+FROM UTILIZATORI_COS UC
+LEFT JOIN PRODUS_MAX PM ON PM.ID_UTILIZATOR = UC.ID_UTILIZATOR 
+ORDER BY ID_UTILIZATOR;
+
+
+-- 2 blocuri de cerere with
+-- sysdate, add_months
+-- subcereri sincronizate
+
+
+
+
+-- Cerere 3
+-- Pentru fiecare comanda a carui curier a efectuat cel putin o livrare in Bucuresti si are salariul mai mare decat salariul mediu al tuturor curierilor, 
+-- selectati numele curierului cu care s-a efectuat comanda, masina, orasul si mesajul "comanda recenta" daca au trecut mai putin de 3 luni, respectiv "comanda trecuta" altfel 
+
+SELECT CO.ID_COMANDA, --subcerere sincronizata
+        (SELECT CONCAT(CONCAT(C.NUME,' '),C.PRENUME)
+         FROM CURIER C
+         WHERE C.ID_CURIER = L.ID_CURIER) AS CURIER, 
+        (SELECT M.MODEL_MASINA 
+        FROM MASINA_LIVRARE M 
+        WHERE M.ID_MASINA = L.ID_MASINA) AS MASINA, 
+        (SELECT A.ORAS
+            FROM ADRESA A
+            WHERE A.ID_ADRESA = L.ID_ADRESA) AS ORAS, 
+        DECODE(SIGN(NVL(MONTHS_BETWEEN(SYSDATE, L.DATA_LIVRARE), 0)),-1,'LIVRARE VIITOARE','LIVRARE EFECTUATA ') AS LIVRARE --decode si nvl, sysdate si monthsbetween
+FROM COMANDA CO
+JOIN LIVRARE L ON CO.ID_LIVRARE = L.ID_LIVRARE
+where L.ID_CURIER IN (SELECT L2.ID_CURIER
+                        FROM LIVRARE L2
+                        JOIN ADRESA A ON L2.ID_ADRESA = A.ID_ADRESA
+                        JOIN CURIER C2 ON C2.ID_CURIER = L2.ID_CURIER
+                        WHERE UPPER(A.ORAS) = 'BUCURESTI' AND C2.SALARIU >= (SELECT AVG(C3.SALARIU)
+                                                                                FROM CURIER C3))
+ORDER BY CO.ID_COMANDA;
+--ordonări și utilizarea funcțiilor NVL și DECODE (în cadrul aceleiași cereri)
+--subcereri sincronizate în care intervin cel puțin 3 tabele
+--SYSDATE, MONTHS_BETWEEN
+
+
+
+
+-- Cerere 4
+--Selectați toti utilizatorii născuți înainte de anul 2000, care conțin cel puțin doua litere de ‘A’ in email,
+--au plasat cel puțin o comanda în anul 2024, iar media comenzilor personale este mai mare sau egal decât media tuturor comenzilor din magazin din anul respectiv. 
+--Se va afișa numele complet al utilizatorului, cât si numărul de comenzi și prețul mediu al comenzilor. 
+--Rezultatele vor fi afișate in ordine descrescătoare în funcție de prețul mediu al comenzii.  
+
+
+WITH A_UTILIZATORI AS( --BLOC DE CERERE CU WITH
+	SELECT DISTINCT U.ID_UTILIZATOR, 
+                    CONCAT(CONCAT(U.NUME,' '),U.PRENUME) AS NUME_INTREG, 
+                    AVG(P.VALOARE) AS COMANDA_MEDIE, 
+                    COUNT(C.ID_COMANDA) AS NUMAR_COMENZI
+	FROM COMANDA C
+	JOIN UTILIZATOR U ON C.ID_UTILIZATOR = U.ID_UTILIZATOR
+	JOIN PLATA P ON P.ID_COMANDA = C.ID_COMANDA
+	WHERE UPPER(U.EMAIL) LIKE '%A%A%' AND 
+        UPPER(P.STARE) = 'EFECTUATA' AND 
+        UPPER(C.STARE_COMANDA) = 'EFECTUATA' AND 
+        TO_NUMBER(TO_CHAR(U.DATA_NASTERE,'YYYY')) < 2000 AND
+        TO_NUMBER(TO_CHAR(C.DATA_COMANDA,'YYYY')) = 2024
+	GROUP BY U.ID_UTILIZATOR, U.NUME, U.PRENUME)
+SELECT *
+FROM A_UTILIZATORI A
+WHERE A.COMANDA_MEDIE>=(SELECT AVG(NVL(C1.TOTAL_PLATA,0))
+                        FROM COMANDA C1
+                        WHERE TO_NUMBER(TO_CHAR(C1.DATA_COMANDA,'YYYY')) = 2024) 
+        AND A.NUMAR_COMENZI>=1 
+ORDER BY A.COMANDA_MEDIE;
+
+--1 bloc de cerere cu clauza with
+--2 functi pe șiruri de caractere (concat, to_upper) si 1 pe data calendaristică (to_char)
+--Grupari de date in care intervin 3 tabele
+--Subcerere nesincronizata
+
+
+
+
+--Cerere 5
+-- selectati primele 3 produse comandate de cele mai multe ori si afisati denumirea, 
+-- pretul, o descriere a stocului si categoria din care fac parte
+SELECT *
+FROM (SELECT 
+        P.DENUMIRE_PRODUS, 
+        P.PRET, 
+        (CASE WHEN P.STOC < 5 THEN 'STOC REDUS' --case
+              WHEN P.STOC > 5 THEN 'STOC RIDICAT'END) AS STOC, 
+        NR_COMENZI, 
+        cat.denumire_categorie
+    FROM PRODUS P
+    JOIN (SELECT ID_PRODUS, COUNT(ID_COMANDA) AS NR_COMENZI --SUBCERERE IN FROM
+         FROM PRODUS_COMANDA 
+         GROUP BY ID_PRODUS) PC ON PC.ID_PRODUS = P.ID_PRODUS
+    JOIN CATEGORIE CAT ON CAT.ID_CATEGORIE = P.ID_CATEGORIE
+    ORDER BY NR_COMENZI DESC
+) PRODUSE_POPULARE
+WHERE ROWNUM <= 3;
+
+-- subcerere nesincronizata in clauza from
+-- expresia case
+
+
+
+--EXERCITIU 13
+
+--setarea stării comenzilor in efectuat unde livrarea este efectuată 
+UPDATE COMANDA
+SET STARE_COMANDA = 'EFECTUATA'
+WHERE ID_LIVRARE IN (
+    SELECT ID_LIVRARE
+    FROM LIVRARE
+    WHERE STARE = 'EFECTUATA'
+);
+
+
+
+--stergerea masinilor care nu au efectuat nici o livrare in ultimii 2 ani
+DELETE FROM MASINA_LIVRARE
+WHERE ID_MASINA NOT IN (
+    SELECT ID_MASINA
+    FROM LIVRARE
+    WHERE DATA_LIVRARE >= ADD_MONTHS(SYSDATE, -24)
+);
+
+
+
+-- aplicarea unei reduceri de 10% la cosul de cumparaturi 
+-- pentru utilizatorii care au plasat cel putin 2 comenzi
+UPDATE COS_CUMPARATURI
+SET TOTAL_COS = TOTAL_COS * 0.90
+WHERE ID_UTILIZATOR IN (
+    SELECT C.ID_UTILIZATOR
+    FROM COMANDA C
+    GROUP BY ID_UTILIZATOR
+    HAVING COUNT(ID_COMANDA) >= 2
+);
+
+
+
+
+--EXERCITIU 14
+
+--Să se creeze vizualizarea VIZ_PRODUS_CATEGORIE care conţine denumirea unui produs, pretul acestuia, 
+--categoria din care face parte si de cate ori a fost comandat. 
+
+CREATE OR REPLACE VIEW VIZ_PRODUS_CATEGORIE AS 
+SELECT P.DENUMIRE_PRODUS, P.PRET, C.DENUMIRE_CATEGORIE, 
+        (SELECT COUNT(PC.ID_COMANDA)
+            FROM PRODUS_COMANDA PC 
+            WHERE PC.ID_PRODUS = P.ID_PRODUS
+        ) NR_COMENZI
+FROM PRODUS P
+JOIN CATEGORIE C ON P.ID_CATEGORIE = C.ID_CATEGORIE;
+
+
+SELECT * FROM VIZ_PRODUS_CATEGORIE;
+
+
+-- OPERATIE PERMISA 
+-- COLOANELE DENUMIRE_PRODUS SI PRET SUNT SINGURELE COLOANE ACTUALIZABILE DEOARECE APARTIN TABELULUI PRODUS, CARE ESTE KEY-PRESERVED
+-- IN PLUS, FUNCTIA ESTE IN SUBCERERE, DECI DENUMIRE_PRODUS SI PRET SUNT ACTUALIZABILE
+INSERT INTO VIZ_PRODUS_CATEGORIE (DENUMIRE_PRODUS, PRET) VALUES ('PANTALONI SCURTI','89.99');
+
+-- OPERATIE NEPERMISA
+-- NU SE POT MODIFICA DATELE DIN MAI MULTE TABELE DE BAZA 
+INSERT INTO VIZ_PRODUS_CATEGORIE (DENUMIRE_PRODUS, PRET, DENUMIRE_CATEGORIE) VALUES ('SANDALE DE PIELE','189.99', 'PANTOFI');
+
+-- OPERATIE NEPERMISA
+-- TABELUL CATEGORIE NU ESTE KEY-PRESERVED
+INSERT INTO VIZ_PRODUS_CATEGORIE (DENUMIRE_CATEGORIE) VALUES ('PIJAMALE');
+
+
+
+--EXERCITIU 15
+
+--OUTER-JOIN PE MINIMUM 4 TABELE
+--PENTRU FIECARE PRODUS SA SE AFISEZE DENUMIREA, DE CATE ORI A FOST COMANDAT, IN CATE LISTE DE DORINTE SE AFLA, 
+--IN CATE COSURI DE CUMPARATURI SE AFLA SI NUMARUL TOTAL DE APARITII (COMENZI+LISTE+COSURI)
+SELECT 
+    P.DENUMIRE_PRODUS,
+    COUNT(DISTINCT PC.ID_COMANDA) AS NUMAR_COMENZI,
+    COUNT(DISTINCT LP.ID_LISTA) AS NUMAR_LISTE,
+    COUNT(DISTINCT PCO.ID_COS) AS NUMAR_COSURI,
+    COUNT(DISTINCT PC.ID_COMANDA) + COUNT(DISTINCT LP.ID_LISTA)+COUNT(DISTINCT PCO.ID_COS) AS APARITII_TOTALE
+FROM PRODUS P 
+LEFT JOIN PRODUS_COMANDA PC ON P.ID_PRODUS = PC.ID_PRODUS
+LEFT JOIN PRODUS_LISTA LP ON P.ID_PRODUS = LP.ID_PRODUS
+LEFT JOIN PRODUS_COS PCO ON P.ID_PRODUS = PCO.ID_PRODUS
+GROUP BY P.DENUMIRE_PRODUS
+ORDER BY APARITII_TOTALE DESC;
+
+-- AM FOLOSIT LEFT JOIN DEOARECE NU TOATE PRODUSELE AU FOST COMANDATE SAU SE AFLA IN LISTE DE DORINTE/COSURI DE CUMPARATURI,
+-- DAR DORIM SA VIZUALIZAM TOATE PRODUSELE, INCLUSIV CELE FARA APARITII
+
+
+-- DIVISION
+
+--Să se afiseze informaţii despre produsele care au fost regasite în toate comenzile plasate în 
+--primele 3 luni ale anului
+
+SELECT P.id_produs, P.denumire_produs, P.pret, P.stoc, P.id_categorie
+FROM PRODUS P
+WHERE NOT EXISTS (
+    ( --toate comenzile plasate in primele 3 luni din 2024
+        SELECT C.id_comanda
+        FROM COMANDA C
+        WHERE TO_CHAR(C.data_comanda, 'YYYY-MM') BETWEEN '2024-01' AND '2024-03'
+    )
+    MINUS
+    ( --toate comenzile din primele 3 luni din 2024 in care a fost comandat produsul
+        SELECT PC.id_comanda
+        FROM PRODUS_COMANDA PC
+        JOIN COMANDA C ON PC.id_comanda = C.id_comanda
+        WHERE TO_CHAR(C.data_comanda, 'YYYY-MM') BETWEEN '2024-01' AND '2024-03'
+          AND PC.id_produs = P.id_produs
+    )
+);
+
+
+-- ANALIZA TOP N
+-- SA SE AFISEZE NUMELE, PRENUMELE, NUMARUL DE LIVRARI SI DATA ULTIMEI LIVRARI EFECTUATE 
+-- PENTRU PRIMII 3 CURIERI CU CELE MAI MULTE LIVRARI EFECTUATE IN ANUL 2024
+SELECT *
+FROM (SELECT CONCAT(CONCAT(C.NUME,' '),C.PRENUME) AS NUME,
+             COUNT(CO.ID_LIVRARE) AS NUMAR_COMENZI,
+             MAX(CO.DATA_LIVRARE) AS ULTIMA_COMANDA
+      FROM CURIER C
+      JOIN LIVRARE CO ON CO.ID_CURIER = C.ID_CURIER
+      WHERE TO_NUMBER(TO_CHAR(CO.DATA_LIVRARE,'YYYY')) = 2024
+      GROUP BY C.NUME, C.PRENUME
+      ORDER BY NUMAR_COMENZI DESC
+) CURIER_ACTIVI
+WHERE ROWNUM<=3;
+
+
